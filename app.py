@@ -13,7 +13,10 @@ from flask_bcrypt import Bcrypt
 import locale
 # Esta linha descobre o caminho absoluto para o diretório onde app.py está
 basedir = os.path.abspath(os.path.dirname(__file__))
-locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
+try:
+    locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
+except locale.Error:
+    locale.setlocale(locale.LC_ALL, '')
 
 # --- CONFIGURAÇÃO ---
 app = Flask(__name__)
