@@ -510,25 +510,25 @@ def create_admin_command(username, password):
 def init_db_command():
     """Limpa os dados existentes e cria novas tabelas com dados padrão."""
     db = get_db()
-    cursor = db.cursor()
-    
-    # Limpar tabelas existentes
-    print("Limpando tabelas antigas (se existiam)...")
-    cursor.execute("DROP TABLE IF EXISTS pareceres;")
-    cursor.execute("DROP TABLE IF EXISTS membros;")
-    cursor.execute("DROP TABLE IF EXISTS comissoes;")
-    cursor.execute("DROP TABLE IF EXISTS user;") 
 
-    # Criar tabelas
+    print("Limpando tabelas antigas (se existiam)...")
+
+    db.execute("DROP TABLE IF EXISTS pareceres;")
+    db.execute("DROP TABLE IF EXISTS membros;")
+    db.execute("DROP TABLE IF EXISTS comissoes;")
+    db.execute("DROP TABLE IF EXISTS user;")
+
     print("Criando novas tabelas...")
-    cursor.execute('''
+
+    db.execute('''
     CREATE TABLE comissoes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT NOT NULL,
         sigla TEXT NOT NULL UNIQUE
     );
     ''')
-    cursor.execute('''
+
+    db.execute('''
     CREATE TABLE membros (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         comissao_id INTEGER NOT NULL,
@@ -537,7 +537,8 @@ def init_db_command():
         FOREIGN KEY (comissao_id) REFERENCES comissoes (id)
     );
     ''')
-    cursor.execute('''
+
+    db.execute('''
     CREATE TABLE pareceres (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         pdf_name TEXT NOT NULL,
@@ -546,13 +547,15 @@ def init_db_command():
         data_geracao TEXT NOT NULL
     );
     ''')
-    cursor.execute('''
+
+    db.execute('''
     CREATE TABLE user (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL
     );
     ''')
+
     print("Tabelas (comissoes, membros, pareceres, user) criadas.")
 
     # Inserir Comissões Padrão
@@ -562,48 +565,71 @@ def init_db_command():
         ('Comissão de Obras, Serviços Públicos e Atividades Privadas', 'COSPAP'),
         ('Comissão de Educação, Saúde e Assistência Social', 'CESAS')
     ]
-    cursor.executemany('INSERT INTO comissoes (nome, sigla) VALUES (?, ?)', comissoes)
+
+    db.executemany(
+        'INSERT INTO comissoes (nome, sigla) VALUES (?, ?)',
+        comissoes
+    )
+
     print("Comissões padrão inseridas.")
+
     db.commit()
 
     # Buscar IDs das comissões
     try:
-        cjr_id = cursor.execute("SELECT id FROM comissoes WHERE sigla = 'CJR'").fetchone()['id']
-        cfo_id = cursor.execute("SELECT id FROM comissoes WHERE sigla = 'CFO'").fetchone()['id']
-        cospap_id = cursor.execute("SELECT id FROM comissoes WHERE sigla = 'COSPAP'").fetchone()['id']
-        cesas_id = cursor.execute("SELECT id FROM comissoes WHERE sigla = 'CESAS'").fetchone()['id']
+        cjr_id = db.execute(
+            "SELECT id FROM comissoes WHERE sigla = 'CJR'"
+        ).fetchone()['id']
+
+        cfo_id = db.execute(
+            "SELECT id FROM comissoes WHERE sigla = 'CFO'"
+        ).fetchone()['id']
+
+        cospap_id = db.execute(
+            "SELECT id FROM comissoes WHERE sigla = 'COSPAP'"
+        ).fetchone()['id']
+
+        cesas_id = db.execute(
+            "SELECT id FROM comissoes WHERE sigla = 'CESAS'"
+        ).fetchone()['id']
+
     except TypeError:
         print("ERRO: Falha ao buscar IDs das comissões. Verifique as siglas.")
         db.close()
         return
+
     # Inserir Membros Padrão
     membros = [
         (cjr_id, 'Vereador A (CJR)', 'Presidente'),
         (cjr_id, 'Vereador B (CJR)', 'Vice-Presidente'),
         (cjr_id, 'Vereador C (CJR)', 'Membro'),
+
         (cfo_id, 'Vereador D (CFO)', 'Presidente'),
         (cfo_id, 'Vereador E (CFO)', 'Vice-Presidente'),
         (cfo_id, 'Vereador F (CFO)', 'Membro'),
+
         (cospap_id, 'Vereador G (COSPAP)', 'Presidente'),
         (cospap_id, 'Vereador H (COSPAP)', 'Vice-Presidente'),
         (cospap_id, 'Vereador I (COSPAP)', 'Membro'),
+
         (cesas_id, 'Vereador J (CESAS)', 'Presidente'),
         (cesas_id, 'Vereador K (CESAS)', 'Vice-Presidente'),
         (cesas_id, 'Vereador L (CESAS)', 'Membro')
     ]
 
-    cursor.executemany(
-        'INSERT INTO membros (comissao_id, nome, cargo) VALUES (?, ?, ?)', membros
+    db.executemany(
+        'INSERT INTO membros (comissao_id, nome, cargo) VALUES (?, ?, ?)',
+        membros
     )
 
     print("Membros padrão inseridos.")
 
-    # --- CRIA USUÁRIO ADMIN ---
+    # Criar usuário admin
     print("Criando usuário administrador padrão...")
 
     senha_admin = bcrypt.generate_password_hash("admin123").decode("utf-8")
 
-    cursor.execute(
+    db.execute(
         "INSERT OR IGNORE INTO user (username, password_hash) VALUES (?, ?)",
         ("admin", senha_admin)
     )
