@@ -1,16 +1,18 @@
-# app.py - VERSÃO APRIMORADA
+# app.py - VERSÃO DEFINITIVA (POSTGRESQL)
 
 import os
 import re
 import fitz
 import docx
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import click
 from datetime import datetime
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, flash
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
 import locale
+
 # Esta linha descobre o caminho absoluto para o diretório onde app.py está
 basedir = os.path.abspath(os.path.dirname(__file__))
 try:
@@ -25,7 +27,7 @@ app.secret_key = os.environ.get('SECRET_KEY', 'chave-local-para-nao-quebrar-o-te
 UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
 GENERATED_FOLDER = os.path.join(basedir, 'generated')
 TEMPLATE_FOLDER = os.path.join(basedir, 'templates_docx')
-DATABASE = os.path.join(basedir, 'database.db')
+
 bcrypt = Bcrypt(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login' 
@@ -40,28 +42,50 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(GENERATED_FOLDER, exist_ok=True)
 os.makedirs(TEMPLATE_FOLDER, exist_ok=True)
 
-# --- BANCO DE DADOS ---
+# --- WRAPPER POSTGRESQL (Mantém a lógica do SQLite funcionando) ---
+class DBWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def execute(self, query, params=None):
+        cur = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        if params:
+            cur.execute(query, params)
+        else:
+            cur.execute(query)
+        return cur
+
+    def executemany(self, query, params_list):
+        cur = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.executemany(query, params_list)
+        return cur
+
+    def commit(self):
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+
 def get_db():
-    conn = sqlite3.connect(DATABASE, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    # Conecta ao PostgreSQL usando a variável que salvamos no Render
+    DATABASE_URL = os.environ.get('DATABASE_URL')
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL não configurada no ambiente.")
+    
+    conn = psycopg2.connect(DATABASE_URL)
+    return DBWrapper(conn)
 
 @login_manager.user_loader
 def load_user(user_id):
-    """Função obrigatória do Flask-Login para carregar o usuário da sessão."""
     db = get_db()
-    user_data = db.execute('SELECT * FROM user WHERE id = ?', (user_id,)).fetchone()
+    user_data = db.execute('SELECT * FROM "user" WHERE id = %s', (user_id,)).fetchone()
     db.close()
     if user_data:
         return User(user_data['id'], user_data['username'], user_data['password_hash'])
     return None
 
-# --- LÓGICA DE SUBSTITUIÇÃO DE TEXTO (para manter a formatação) ---
+# --- LÓGICA DE SUBSTITUIÇÃO DE TEXTO ---
 def replace_text_in_paragraph(paragraph, key, value):
-    """
-    Substitui um placeholder em um parágrafo, mantendo a formatação.
-    Esta versão robusta lida com placeholders quebrados em múltiplos 'runs'.
-    """
     if key not in paragraph.text:
         return
 
@@ -95,16 +119,13 @@ def replace_text_in_paragraph(paragraph, key, value):
         for i in range(len(paragraph.runs)):
             paragraph.runs[i].text = run_texts[i]
 
-# --- MODELO DE USUÁRIO PARA O LOGIN ---
+# --- MODELO DE USUÁRIO ---
 class User(UserMixin):
-    # UserMixin é uma classe especial do Flask-Login
-    # que já nos dá funções como is_authenticated, etc.
     def __init__(self, id, username, password_hash):
         self.id = id
         self.username = username
         self.password_hash = password_hash
 
-    # Esta função é necessária para o Flask-Login
     def get_id(self):
         return str(self.id)
 
@@ -117,64 +138,31 @@ def processar_pdf(pdf_path):
                 texto_extraido += page.get_text() + " "
 
         texto_limpo = re.sub(r'\s+', ' ', texto_extraido.replace('\n', ' '))
-
-        print("--- TEXTO LIMPO PARA ANÁLISE REGEX ---")
-        print(texto_limpo)
-        print("-----------------------------------------")
-
         dados_do_projeto = {}
 
-        # --- Regex Refinadas (v5) - CORRIGIDAS ---
-        
-        # Padrão ÚNICO para TIPO e NÚMERO.
-        # Procura "PROJETO DE LEI..." e DEPOIS "N... 45"
         padrao_tipo_e_numero = r"(PROJETO DE LEI (ORDIN[ÁA]RIA|COMPLEMENTAR)|PROJETO DE RESOLUÇÃO|PROJETO DE DECRETO LEGISLATIVO|PROPOSTA DE EMENDA [ÁA] LEI ORG[ÂA]NICA MUNICIPAL)\s*(?:N[º'q9]|n[oº9]|ne)\s*(\d+)"
-        
         padrao_data = r"(\d{1,2}\s+de\s+\w+\s+(?:de|oe)\s+(\d{4}))"
         padrao_ementa = r"\"\s*(Abre.*?Anual.*?)\s*\""
 
-        print("Iniciando busca por Regex...")
-
-        # Variáveis para combinar o número
         match_numero_val = None
         match_ano_val = None
 
         if (match := re.search(padrao_tipo_e_numero, texto_limpo, re.IGNORECASE)):
             dados_do_projeto["TIPO_PROJETO"] = match.group(1).upper().strip()
-            match_numero_val = match.group(3) # Grupo 3 é o (\d+)
-            print(f"SUCESSO (Regex): TIPO_PROJETO={dados_do_projeto['TIPO_PROJETO']}")
-            print(f"SUCESSO (Regex): NÚMERO={match_numero_val}")
-        else:
-            print("FALHA (Regex): Padrão combinado TIPO/NÚMERO não encontrado.")
-            
+            match_numero_val = match.group(3)
+
         if (match_data := re.search(padrao_data, texto_limpo, re.IGNORECASE)):
             dados_do_projeto["DATA_PROJETO"] = match_data.group(1).strip()
-            match_ano_val = match_data.group(2) # Ex: "2025"
-            print(f"SUCESSO (Regex): DATA_PROJETO={dados_do_projeto['DATA_PROJETO']}")
-            print(f"SUCESSO (Regex): ANO={match_ano_val}")
-        else:
-            print("FALHA (Regex): DATA_PROJETO (ex: ...OE 2025) não encontrada.")
+            match_ano_val = match_data.group(2)
 
-        # Combina número e ano no formato que o sistema espera
         if match_numero_val and match_ano_val:
-            dados_do_projeto["NUMERO_PROJETO"] = f"{match_numero_val.zfill(3)}/{match_ano_val}" # Formata para "045/2025"
-            print(f"SUCESSO (Combinado): NUMERO_PROJETO={dados_do_projeto['NUMERO_PROJETO']}")
-        else:
-            print("FALHA (Combinado): Não foi possível criar o NUMERO_PROJETO.")
+            dados_do_projeto["NUMERO_PROJETO"] = f"{match_numero_val.zfill(3)}/{match_ano_val}"
 
         if (match := re.search(padrao_ementa, texto_limpo, re.IGNORECASE | re.DOTALL)):
             ementa_limpa = match.group(1).strip().replace("Í", "i").replace("çá", "çã").replace("ôe", "õe")
             dados_do_projeto["EMENTA"] = f'"{ementa_limpa}"'
-            print(f"SUCESSO (Regex): EMENTA={dados_do_projeto['EMENTA'][:50]}...")
-        else:
-            print("FALHA (Regex): EMENTA (ex: 'Abre...Anual') não encontrada.")
 
-        print("--- Dados Extraídos ---")
-        print(dados_do_projeto)
-        print("-----------------------")
-        
         return dados_do_projeto
-
     except Exception as e:
         print(f"Erro ao processar PDF: {e}")
         return {}
@@ -184,13 +172,11 @@ def gerar_docx_final(form_data, pdf_filename):
     db = get_db()
     comissoes_selecionadas = form_data.getlist('comissao_selecionada')
 
-    ### --- INÍCIO DA LÓGICA DE NOVOS NOMES --- ###
     tipo_projeto = form_data.get("tipo_projeto", "").upper()
     autoria = form_data.get("autoria", "").upper()
     numero_projeto = form_data.get("numero_projeto", "00-0000")
 
-    prefixo = "DOC" # Um prefixo padrão
-
+    prefixo = "DOC"
     if "PROJETO DE LEI ORDINARIA" in tipo_projeto:
         prefixo = "PLOC" if "CÂMARA" in autoria else "PLOE"
     elif "PROJETO DE LEI COMPLEMENTAR" in tipo_projeto:
@@ -202,39 +188,31 @@ def gerar_docx_final(form_data, pdf_filename):
     elif "PROPOSTA DE EMENDA" in tipo_projeto:
         prefixo = "PELO"
 
-    # Formata o número (ex: "045/2025" -> "45_2025")
-    # Removemos o zero à esquerda para ficar "50_2025" e não "050_2025"
     numero_sem_zero = numero_projeto.split('/')[0].lstrip('0')
     ano = numero_projeto.split('/')[-1]
     numero_formatado = f"{numero_sem_zero}_{ano}"
-    ### --- FIM DA LÓGICA DE NOVOS NOMES --- ###
 
     for sigla in comissoes_selecionadas:
         template_path = os.path.join(app.config['TEMPLATE_FOLDER'], f"template_{sigla.lower()}.docx")
 
         if not os.path.exists(template_path): 
-            print(f"AVISO: Template não encontrado para {sigla} em {template_path}. Pulando...")
             continue
 
         doc = docx.Document(template_path)
-        comissao = db.execute('SELECT * FROM comissoes WHERE sigla = ?', (sigla,)).fetchone()
-        membros = db.execute('SELECT * FROM membros WHERE comissao_id = ?', (comissao['id'],)).fetchall()
+        comissao = db.execute('SELECT * FROM comissoes WHERE sigla = %s', (sigla,)).fetchone()
+        membros = db.execute('SELECT * FROM membros WHERE comissao_id = %s', (comissao['id'],)).fetchall()
 
         relator_id = form_data.get(f'relator_{sigla}')
         if not relator_id:
-            print(f"AVISO: Relator não selecionado para {sigla}. Pulando...")
             continue 
 
-        relator = db.execute('SELECT * FROM membros WHERE id = ?', (relator_id,)).fetchone()
-
+        relator = db.execute('SELECT * FROM membros WHERE id = %s', (relator_id,)).fetchone()
         if not relator:
-            print(f"AVISO: Relator ID {relator_id} não encontrado no DB para {sigla}. Pulando...")
             continue
 
         signatarios = [m for m in membros if m['id'] != relator['id']]
         data_parecer = datetime.strptime(form_data.get('data_parecer'), '%Y-%m-%d')
 
-        # (O seu dicionário 'contexto' permanece exatamente o mesmo)
         contexto = {
             "{{TIPO_PROJETO}}": form_data.get("tipo_projeto"),
             "{{NUMERO_PROJETO}}": form_data.get("numero_projeto"),
@@ -266,14 +244,12 @@ def gerar_docx_final(form_data, pdf_filename):
                         for key, value in contexto.items():
                             replace_text_in_paragraph(p, key, str(value))
 
-        ### --- ALTERAÇÃO NO NOME DE SAÍDA --- ###
         nome_saida = f"{prefixo} {numero_formatado} {sigla}.docx"
         caminho_saida = os.path.join(app.config['GENERATED_FOLDER'], nome_saida)
         doc.save(caminho_saida)
         arquivos_gerados.append(nome_saida)
-        print(f"SUCESSO: Arquivo '{nome_saida}' gerado.")
 
-        db.execute('INSERT INTO pareceres (pdf_name, docx_name, numero_projeto, data_geracao) VALUES (?, ?, ?, ?)',
+        db.execute('INSERT INTO pareceres (pdf_name, docx_name, numero_projeto, data_geracao) VALUES (%s, %s, %s, %s)',
                    (pdf_filename, nome_saida, form_data.get('numero_projeto'), datetime.now().strftime("%d/%m/%Y %H:%M:%S")))
         db.commit()
 
@@ -311,21 +287,16 @@ def upload():
 @app.route('/gerar', methods=['POST'])
 @login_required
 def gerar():
-    # --- NOVO BLOCO DE VERIFICAÇÃO ---
-    # Verifica PRIMEIRO se alguma comissão foi selecionada
     comissoes_selecionadas = request.form.getlist('comissao_selecionada')
     if not comissoes_selecionadas:
         flash('Erro: Nenhuma comissão foi selecionada. Tente novamente.')
-        # Redirecionar de volta para a página inicial é o mais simples
         return redirect(url_for('index'))
-    # --- FIM DO NOVO BLOCO ---
 
     pdf_filename = request.form.get('pdf_filename')
     
     try:
         arquivos_gerados = gerar_docx_final(request.form, pdf_filename)
         
-        # Segunda verificação: Se os arquivos gerados estiverem vazios (ex: erro de template)
         if not arquivos_gerados:
             flash('Erro ao gerar os arquivos. Verifique os templates e dados do formulário.')
             return redirect(url_for('index'))
@@ -333,12 +304,9 @@ def gerar():
         return render_template('resultado.html', arquivos=arquivos_gerados)
 
     except Exception as e:
-        # Captura erros na geração (ex: template .docx não encontrado)
-        print(f"ERRO CRÍTICO EM /gerar: {e}")
         flash(f'Erro interno ao gerar documentos: {e}')
         return redirect(url_for('index'))
 
-# Rotas de download e init-db continuam as mesmas da versão anterior
 @app.route('/download/<filename>')
 @login_required
 def download(filename):
@@ -347,20 +315,15 @@ def download(filename):
 @app.route('/deletar_historico/<int:item_id>', methods=['POST'])
 @login_required
 def deletar_historico(item_id):
-    """Deleta um item específico do histórico e seu arquivo."""
     try:
         db = get_db()
-        # 1. Pega o nome do arquivo no DB ANTES de deletar
-        item = db.execute('SELECT docx_name FROM pareceres WHERE id = ?', (item_id,)).fetchone()
-
+        item = db.execute('SELECT docx_name FROM pareceres WHERE id = %s', (item_id,)).fetchone()
         if item:
-            # 2. Deleta o arquivo físico da pasta 'generated'
             arquivo_path = os.path.join(app.config['GENERATED_FOLDER'], item['docx_name'])
             if os.path.exists(arquivo_path):
                 os.remove(arquivo_path)
 
-        # 3. Deleta o registro do banco de dados
-        db.execute('DELETE FROM pareceres WHERE id = ?', (item_id,))
+        db.execute('DELETE FROM pareceres WHERE id = %s', (item_id,))
         db.commit()
         db.close()
         flash('Item do histórico removido com sucesso.', 'success')
@@ -371,19 +334,14 @@ def deletar_historico(item_id):
 @app.route('/limpar_historico', methods=['POST'])
 @login_required
 def limpar_historico():
-    """Deleta TODO o histórico e TODOS os arquivos gerados."""
     try:
         db = get_db()
-        # 1. Pega todos os nomes de arquivos no DB
         items = db.execute('SELECT docx_name FROM pareceres').fetchall()
-
-        # 2. Deleta todos os arquivos físicos da pasta 'generated'
         for item in items:
             arquivo_path = os.path.join(app.config['GENERATED_FOLDER'], item['docx_name'])
             if os.path.exists(arquivo_path):
                 os.remove(arquivo_path)
 
-        # 3. Deleta todos os registros do banco de dados
         db.execute('DELETE FROM pareceres')
         db.commit()
         db.close()
@@ -401,7 +359,7 @@ def adicionar_membro():
         comissao_id = request.form['comissao_id']
         
         db = get_db()
-        db.execute('INSERT INTO membros (nome, cargo, comissao_id) VALUES (?, ?, ?)',
+        db.execute('INSERT INTO membros (nome, cargo, comissao_id) VALUES (%s, %s, %s)',
                    (nome, cargo, comissao_id))
         db.commit()
         db.close()
@@ -417,10 +375,8 @@ def deletar_membro():
         membro_id = request.form['membro_id']
         
         db = get_db()
-        # Pega o nome para a mensagem flash ANTES de deletar
-        nome_membro = db.execute('SELECT nome FROM membros WHERE id = ?', (membro_id,)).fetchone()['nome']
-        
-        db.execute('DELETE FROM membros WHERE id = ?', (membro_id,))
+        nome_membro = db.execute('SELECT nome FROM membros WHERE id = %s', (membro_id,)).fetchone()['nome']
+        db.execute('DELETE FROM membros WHERE id = %s', (membro_id,))
         db.commit()
         db.close()
         flash(f'Membro "{nome_membro}" removido com sucesso!')
@@ -431,9 +387,8 @@ def deletar_membro():
 @app.route('/editar_membro/<int:membro_id>', methods=['GET'])
 @login_required
 def editar_membro(membro_id):
-    """Exibe o formulário de edição para um membro específico."""
     db = get_db()
-    membro = db.execute('SELECT * FROM membros WHERE id = ?', (membro_id,)).fetchone()
+    membro = db.execute('SELECT * FROM membros WHERE id = %s', (membro_id,)).fetchone()
     comissoes = db.execute('SELECT * FROM comissoes ORDER BY nome').fetchall()
     db.close()
     
@@ -446,7 +401,6 @@ def editar_membro(membro_id):
 @app.route('/atualizar_membro', methods=['POST'])
 @login_required
 def atualizar_membro():
-    """Processa a atualização dos dados do membro."""
     try:
         membro_id = request.form['membro_id']
         nome = request.form['nome']
@@ -454,7 +408,7 @@ def atualizar_membro():
         comissao_id = request.form['comissao_id']
         
         db = get_db()
-        db.execute('UPDATE membros SET nome = ?, cargo = ?, comissao_id = ? WHERE id = ?',
+        db.execute('UPDATE membros SET nome = %s, cargo = %s, comissao_id = %s WHERE id = %s',
                    (nome, cargo, comissao_id, membro_id))
         db.commit()
         db.close()
@@ -470,11 +424,10 @@ def gerenciar():
     db = get_db()
     comissoes = db.execute('SELECT * FROM comissoes ORDER BY nome').fetchall()
     
-    # Vamos buscar os membros e agrupá-los por comissão
     membros_por_comissao = {}
     for comissao in comissoes:
         membros = db.execute(
-            'SELECT * FROM membros WHERE comissao_id = ? ORDER BY nome', 
+            'SELECT * FROM membros WHERE comissao_id = %s ORDER BY nome', 
             (comissao['id'],)
         ).fetchall()
         membros_por_comissao[comissao['id']] = membros
@@ -490,16 +443,14 @@ def gerenciar():
 @click.argument('username')
 @click.argument('password')
 def create_admin_command(username, password):
-    """Cria um novo usuário administrador."""
     db = get_db()
     try:
-        # Criptografa a senha
         hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
-        db.execute('INSERT INTO user (username, password_hash) VALUES (?, ?)',
-                   (username, hashed_password))
+        db.execute('INSERT INTO "user" (username, password_hash) VALUES (%s, %s)', (username, hashed_password))
         db.commit()
         print(f"Administrador '{username}' criado com sucesso.")
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
+        db.conn.rollback()
         print(f"Erro: Usuário '{username}' já existe.")
     except Exception as e:
         print(f"Erro ao criar administrador: {e}")
@@ -507,19 +458,18 @@ def create_admin_command(username, password):
         db.close()
 
 def init_db():
-    """Função interna para criar e popular o banco de dados."""
     db = get_db()
 
     print("Limpando tabelas antigas (se existiam)...")
-    db.execute("DROP TABLE IF EXISTS pareceres;")
-    db.execute("DROP TABLE IF EXISTS membros;")
-    db.execute("DROP TABLE IF EXISTS comissoes;")
-    db.execute("DROP TABLE IF EXISTS user;")
+    db.execute('DROP TABLE IF EXISTS pareceres CASCADE;')
+    db.execute('DROP TABLE IF EXISTS membros CASCADE;')
+    db.execute('DROP TABLE IF EXISTS comissoes CASCADE;')
+    db.execute('DROP TABLE IF EXISTS "user" CASCADE;')
 
     print("Criando novas tabelas...")
     db.execute('''
     CREATE TABLE comissoes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         nome TEXT NOT NULL,
         sigla TEXT NOT NULL UNIQUE
     );
@@ -527,7 +477,7 @@ def init_db():
 
     db.execute('''
     CREATE TABLE membros (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         comissao_id INTEGER NOT NULL,
         nome TEXT NOT NULL,
         cargo TEXT NOT NULL,
@@ -537,7 +487,7 @@ def init_db():
 
     db.execute('''
     CREATE TABLE pareceres (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         pdf_name TEXT NOT NULL,
         docx_name TEXT NOT NULL,
         numero_projeto TEXT,
@@ -546,27 +496,22 @@ def init_db():
     ''')
 
     db.execute('''
-    CREATE TABLE user (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+    CREATE TABLE "user" (
+        id SERIAL PRIMARY KEY,
         username TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL
     );
     ''')
 
-    print("Tabelas (comissoes, membros, pareceres, user) criadas.")
-
-    # Inserir Comissões Padrão
     comissoes = [
         ('Comissão de Justiça e Redação', 'CJR'),
         ('Comissão de Finanças e Orçamento', 'CFO'),
         ('Comissão de Obras, Serviços Públicos e Atividades Privadas', 'COSPAP'),
         ('Comissão de Educação, Saúde e Assistência Social', 'CESAS')
     ]
-    db.executemany('INSERT INTO comissoes (nome, sigla) VALUES (?, ?)', comissoes)
-
+    db.executemany('INSERT INTO comissoes (nome, sigla) VALUES (%s, %s)', comissoes)
     db.commit()
 
-    # Buscar IDs das comissões
     try:
         cjr_id = db.execute("SELECT id FROM comissoes WHERE sigla = 'CJR'").fetchone()['id']
         cfo_id = db.execute("SELECT id FROM comissoes WHERE sigla = 'CFO'").fetchone()['id']
@@ -577,7 +522,6 @@ def init_db():
         db.close()
         return
 
-    # Inserir Membros Padrão
     membros = [
         (cjr_id, 'Vereador A (CJR)', 'Presidente'),
         (cjr_id, 'Vereador B (CJR)', 'Vice-Presidente'),
@@ -592,32 +536,29 @@ def init_db():
         (cesas_id, 'Vereador K (CESAS)', 'Vice-Presidente'),
         (cesas_id, 'Vereador L (CESAS)', 'Membro')
     ]
-    db.executemany('INSERT INTO membros (comissao_id, nome, cargo) VALUES (?, ?, ?)', membros)
+    db.executemany('INSERT INTO membros (comissao_id, nome, cargo) VALUES (%s, %s, %s)', membros)
 
-    print("Criando usuário administrador padrão...")
     senha_admin = bcrypt.generate_password_hash("admin123").decode("utf-8")
-    db.execute("INSERT OR IGNORE INTO user (username, password_hash) VALUES (?, ?)", ("admin", senha_admin))
+    db.execute('INSERT INTO "user" (username, password_hash) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING', ("admin", senha_admin))
 
     db.commit()
     db.close()
-    print("Banco de dados inicializado com sucesso.")
+    print("Banco de dados PostgreSQL inicializado com sucesso!")
 
 @app.cli.command('init-db')
 def init_db_command():
-    """Comando de terminal: Limpa os dados existentes e cria novas tabelas com dados padrão."""
     init_db()
 
 @app.route('/setup-banco')
 def setup_banco():
     try:
-        init_db()  # <-- Mudamos de init_db_command() para init_db()
-        return "<h3>Banco de dados inicializado com sucesso!</h3><br><a href='/login'>Clique aqui para fazer o Login</a>"
+        init_db()
+        return "<h3>Banco de dados PostgreSQL inicializado com sucesso!</h3><br><a href='/login'>Clique aqui para fazer o Login</a>"
     except Exception as e:
         return f"Erro ao criar o banco: {e}"
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    # Se o usuário já estiver logado, redireciona para a home
     if current_user.is_authenticated:
         return redirect(url_for('index'))
         
@@ -626,14 +567,13 @@ def login():
         password = request.form['password']
         
         db = get_db()
-        user_data = db.execute('SELECT * FROM user WHERE username = ?', (username,)).fetchone()
+        user_data = db.execute('SELECT * FROM "user" WHERE username = %s', (username,)).fetchone()
         db.close()
         
-        # Verifica se o usuário existe e se a senha está correta
         if user_data:
             user = User(user_data['id'], user_data['username'], user_data['password_hash'])
             if bcrypt.check_password_hash(user.password_hash, password):
-                login_user(user) # <-- A "mágica" do Flask-Login acontece aqui
+                login_user(user)
                 flash('Login realizado com sucesso!', 'success')
                 return redirect(url_for('index'))
                 
@@ -647,29 +587,3 @@ def logout():
     logout_user()
     flash('Você foi desconectado.', 'success')
     return redirect(url_for('login'))
-
-
-# Inicializa banco automaticamente no deploy
-def inicializar_banco():
-    with app.app_context():
-
-        db = get_db()
-
-        tables = db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-
-        table_names = {t['name'] for t in tables}
-
-        required_tables = {"user", "comissoes", "membros", "pareceres"}
-
-        if not required_tables.issubset(table_names):
-            print("Estrutura do banco incompleta. Criando banco...")
-
-            init_db_command()
-
-        db.close()
-
-
-# executa automaticamente ao iniciar o app
-# inicializar_banco()
