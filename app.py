@@ -20,6 +20,17 @@ except locale.Error:
 
 # --- CONFIGURAÇÃO ---
 app = Flask(__name__)
+
+@app.before_first_request
+def initialize_database():
+    db = get_db()
+    tables = db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='user'"
+    ).fetchone()
+
+    if tables is None:
+        print("Banco não encontrado. Criando estrutura...")
+        init_db_command()
 app.secret_key = os.environ.get('SECRET_KEY', 'chave-local-para-nao-quebrar-o-teste')
 UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
 GENERATED_FOLDER = os.path.join(basedir, 'generated')
