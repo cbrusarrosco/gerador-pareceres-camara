@@ -653,11 +653,15 @@ def init_db_if_needed():
         db = get_db()
 
         tables = db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='user'"
-        ).fetchone()
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
 
-        if tables is None:
-            print("Banco não encontrado. Criando estrutura...")
+        table_names = {t['name'] for t in tables}
+
+        required_tables = {"user", "comissoes", "membros", "pareceres"}
+
+        if not required_tables.issubset(table_names):
+            print("Estrutura do banco incompleta. Recriando banco...")
             init_db_command()
 
         db.close()
