@@ -168,8 +168,15 @@ def processar_pdf(pdf_path):
         return {}
 
 def gerar_docx_final(form_data, pdf_filename):
+    meses_pt = {
+        1: 'janeiro', 2: 'fevereiro', 3: 'março', 4: 'abril',
+        5: 'maio', 6: 'junho', 7: 'julho', 8: 'agosto',
+        9: 'setembro', 10: 'outubro', 11: 'novembro', 12: 'dezembro'
+    }
+    
     arquivos_gerados = []
     db = get_db()
+
     comissoes_selecionadas = form_data.getlist('comissao_selecionada')
 
     tipo_projeto = form_data.get("tipo_projeto", "").upper()
