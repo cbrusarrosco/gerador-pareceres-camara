@@ -630,3 +630,14 @@ def logout():
     logout_user()
     flash('Você foi desconectado.', 'success')
     return redirect(url_for('login'))
+    # Inicializa banco automaticamente no deploy
+def init_db_if_needed():
+    try:
+        db = get_db()
+        db.execute("SELECT 1 FROM user LIMIT 1")
+        db.close()
+    except:
+        print("Inicializando banco de dados...")
+        init_db_command()
+
+init_db_if_needed()
