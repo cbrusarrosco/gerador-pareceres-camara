@@ -625,19 +625,23 @@ def login():
     return render_template('login.html')
 
 @app.route('/logout')
-@login_required # Só quem está logado pode deslogar
+@login_required
 def logout():
     logout_user()
     flash('Você foi desconectado.', 'success')
     return redirect(url_for('login'))
-    # Inicializa banco automaticamente no deploy
+
+
+# Inicializa banco automaticamente no deploy
 def init_db_if_needed():
-    try:
-        db = get_db()
-        db.execute("SELECT 1 FROM user LIMIT 1")
-        db.close()
-    except:
-        print("Inicializando banco de dados...")
-        init_db_command()
+    with app.app_context():
+        try:
+            db = get_db()
+            db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user'")
+            db.close()
+        except Exception:
+            print("Inicializando banco de dados...")
+            init_db_command()
+
 
 init_db_if_needed()
