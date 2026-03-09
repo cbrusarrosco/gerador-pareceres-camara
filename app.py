@@ -639,6 +639,14 @@ def init_db_command():
 
     print("Banco de dados inicializado com sucesso.")
 
+@app.route('/setup-banco')
+def setup_banco():
+    try:
+        init_db_command()
+        return "<h3>Banco de dados inicializado com sucesso!</h3><br><a href='/login'>Clique aqui para fazer o Login</a>"
+    except Exception as e:
+        return f"Erro ao criar o banco: {e}"
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     # Se o usuário já estiver logado, redireciona para a home
@@ -674,7 +682,6 @@ def logout():
 
 
 # Inicializa banco automaticamente no deploy
-@app.before_first_request
 def inicializar_banco():
     with app.app_context():
 
@@ -697,4 +704,4 @@ def inicializar_banco():
 
 
 # executa automaticamente ao iniciar o app
-inicializar_banco()
+# inicializar_banco()
