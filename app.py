@@ -506,7 +506,6 @@ def create_admin_command(username, password):
     finally:
         db.close()
 
-@app.cli.command('init-db')
 def init_db():
     """Função interna para criar e popular o banco de dados."""
     db = get_db()
