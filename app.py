@@ -507,19 +507,17 @@ def create_admin_command(username, password):
         db.close()
 
 @app.cli.command('init-db')
-def init_db_command():
-    """Limpa os dados existentes e cria novas tabelas com dados padrão."""
+def init_db():
+    """Função interna para criar e popular o banco de dados."""
     db = get_db()
 
     print("Limpando tabelas antigas (se existiam)...")
-
     db.execute("DROP TABLE IF EXISTS pareceres;")
     db.execute("DROP TABLE IF EXISTS membros;")
     db.execute("DROP TABLE IF EXISTS comissoes;")
     db.execute("DROP TABLE IF EXISTS user;")
 
     print("Criando novas tabelas...")
-
     db.execute('''
     CREATE TABLE comissoes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -565,34 +563,16 @@ def init_db_command():
         ('Comissão de Obras, Serviços Públicos e Atividades Privadas', 'COSPAP'),
         ('Comissão de Educação, Saúde e Assistência Social', 'CESAS')
     ]
-
-    db.executemany(
-        'INSERT INTO comissoes (nome, sigla) VALUES (?, ?)',
-        comissoes
-    )
-
-    print("Comissões padrão inseridas.")
+    db.executemany('INSERT INTO comissoes (nome, sigla) VALUES (?, ?)', comissoes)
 
     db.commit()
 
     # Buscar IDs das comissões
     try:
-        cjr_id = db.execute(
-            "SELECT id FROM comissoes WHERE sigla = 'CJR'"
-        ).fetchone()['id']
-
-        cfo_id = db.execute(
-            "SELECT id FROM comissoes WHERE sigla = 'CFO'"
-        ).fetchone()['id']
-
-        cospap_id = db.execute(
-            "SELECT id FROM comissoes WHERE sigla = 'COSPAP'"
-        ).fetchone()['id']
-
-        cesas_id = db.execute(
-            "SELECT id FROM comissoes WHERE sigla = 'CESAS'"
-        ).fetchone()['id']
-
+        cjr_id = db.execute("SELECT id FROM comissoes WHERE sigla = 'CJR'").fetchone()['id']
+        cfo_id = db.execute("SELECT id FROM comissoes WHERE sigla = 'CFO'").fetchone()['id']
+        cospap_id = db.execute("SELECT id FROM comissoes WHERE sigla = 'COSPAP'").fetchone()['id']
+        cesas_id = db.execute("SELECT id FROM comissoes WHERE sigla = 'CESAS'").fetchone()['id']
     except TypeError:
         print("ERRO: Falha ao buscar IDs das comissões. Verifique as siglas.")
         db.close()
@@ -603,46 +583,35 @@ def init_db_command():
         (cjr_id, 'Vereador A (CJR)', 'Presidente'),
         (cjr_id, 'Vereador B (CJR)', 'Vice-Presidente'),
         (cjr_id, 'Vereador C (CJR)', 'Membro'),
-
         (cfo_id, 'Vereador D (CFO)', 'Presidente'),
         (cfo_id, 'Vereador E (CFO)', 'Vice-Presidente'),
         (cfo_id, 'Vereador F (CFO)', 'Membro'),
-
         (cospap_id, 'Vereador G (COSPAP)', 'Presidente'),
         (cospap_id, 'Vereador H (COSPAP)', 'Vice-Presidente'),
         (cospap_id, 'Vereador I (COSPAP)', 'Membro'),
-
         (cesas_id, 'Vereador J (CESAS)', 'Presidente'),
         (cesas_id, 'Vereador K (CESAS)', 'Vice-Presidente'),
         (cesas_id, 'Vereador L (CESAS)', 'Membro')
     ]
+    db.executemany('INSERT INTO membros (comissao_id, nome, cargo) VALUES (?, ?, ?)', membros)
 
-    db.executemany(
-        'INSERT INTO membros (comissao_id, nome, cargo) VALUES (?, ?, ?)',
-        membros
-    )
-
-    print("Membros padrão inseridos.")
-
-    # Criar usuário admin
     print("Criando usuário administrador padrão...")
-
     senha_admin = bcrypt.generate_password_hash("admin123").decode("utf-8")
-
-    db.execute(
-        "INSERT OR IGNORE INTO user (username, password_hash) VALUES (?, ?)",
-        ("admin", senha_admin)
-    )
+    db.execute("INSERT OR IGNORE INTO user (username, password_hash) VALUES (?, ?)", ("admin", senha_admin))
 
     db.commit()
     db.close()
-
     print("Banco de dados inicializado com sucesso.")
+
+@app.cli.command('init-db')
+def init_db_command():
+    """Comando de terminal: Limpa os dados existentes e cria novas tabelas com dados padrão."""
+    init_db()
 
 @app.route('/setup-banco')
 def setup_banco():
     try:
-        init_db_command()
+        init_db()  # <-- Mudamos de init_db_command() para init_db()
         return "<h3>Banco de dados inicializado com sucesso!</h3><br><a href='/login'>Clique aqui para fazer o Login</a>"
     except Exception as e:
         return f"Erro ao criar o banco: {e}"
