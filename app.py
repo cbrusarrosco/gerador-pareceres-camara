@@ -635,13 +635,16 @@ def logout():
 # Inicializa banco automaticamente no deploy
 def init_db_if_needed():
     with app.app_context():
-        try:
-            db = get_db()
-            db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user'")
-            db.close()
-        except Exception:
-            print("Inicializando banco de dados...")
+        db = get_db()
+
+        tables = db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='user'"
+        ).fetchone()
+
+        if tables is None:
+            print("Banco não encontrado. Criando estrutura...")
             init_db_command()
 
+        db.close()
 
 init_db_if_needed()
