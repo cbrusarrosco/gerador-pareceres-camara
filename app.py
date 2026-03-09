@@ -674,8 +674,10 @@ def logout():
 
 
 # Inicializa banco automaticamente no deploy
-def init_db_if_needed():
+@app.before_first_request
+def inicializar_banco():
     with app.app_context():
+
         db = get_db()
 
         tables = db.execute(
@@ -687,9 +689,12 @@ def init_db_if_needed():
         required_tables = {"user", "comissoes", "membros", "pareceres"}
 
         if not required_tables.issubset(table_names):
-            print("Estrutura do banco incompleta. Recriando banco...")
+            print("Estrutura do banco incompleta. Criando banco...")
+
             init_db_command()
 
         db.close()
 
-init_db_if_needed()
+
+# executa automaticamente ao iniciar o app
+inicializar_banco()
