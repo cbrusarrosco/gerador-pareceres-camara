@@ -21,16 +21,6 @@ except locale.Error:
 # --- CONFIGURAÇÃO ---
 app = Flask(__name__)
 
-@app.before_first_request
-def initialize_database():
-    db = get_db()
-    tables = db.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='user'"
-    ).fetchone()
-
-    if tables is None:
-        print("Banco não encontrado. Criando estrutura...")
-        init_db_command()
 app.secret_key = os.environ.get('SECRET_KEY', 'chave-local-para-nao-quebrar-o-teste')
 UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
 GENERATED_FOLDER = os.path.join(basedir, 'generated')
@@ -52,7 +42,7 @@ os.makedirs(TEMPLATE_FOLDER, exist_ok=True)
 
 # --- BANCO DE DADOS ---
 def get_db():
-    conn = sqlite3.connect(DATABASE)
+    conn = sqlite3.connect(DATABASE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -586,8 +576,7 @@ def init_db_command():
         print("ERRO: Falha ao buscar IDs das comissões. Verifique as siglas.")
         db.close()
         return
-
-    # Inserir Membros Padrão (Popule com seus dados reais depois)
+    # Inserir Membros Padrão
     membros = [
         (cjr_id, 'Vereador A (CJR)', 'Presidente'),
         (cjr_id, 'Vereador B (CJR)', 'Vice-Presidente'),
@@ -602,11 +591,26 @@ def init_db_command():
         (cesas_id, 'Vereador K (CESAS)', 'Vice-Presidente'),
         (cesas_id, 'Vereador L (CESAS)', 'Membro')
     ]
-    cursor.executemany('INSERT INTO membros (comissao_id, nome, cargo) VALUES (?, ?, ?)', membros)
+
+    cursor.executemany(
+        'INSERT INTO membros (comissao_id, nome, cargo) VALUES (?, ?, ?)', membros
+    )
+
     print("Membros padrão inseridos.")
-    
+
+    # --- CRIA USUÁRIO ADMIN ---
+    print("Criando usuário administrador padrão...")
+
+    senha_admin = bcrypt.generate_password_hash("admin123").decode("utf-8")
+
+    cursor.execute(
+        "INSERT OR IGNORE INTO user (username, password_hash) VALUES (?, ?)",
+        ("admin", senha_admin)
+    )
+
     db.commit()
     db.close()
+
     print("Banco de dados inicializado com sucesso.")
 
 @app.route('/login', methods=['GET', 'POST'])
