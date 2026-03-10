@@ -230,7 +230,7 @@ def gerar_docx_final(form_data, pdf_filename):
             "{{REGIME_URGENCIA}}": ", EM REGIME DE URGÊNCIA" if 'regime_urgencia' in form_data else "",
             "{{TEXTO_APRESENTACAO}}": f" e apresentada como objeto de deliberação na sessão ordinária do dia {datetime.strptime(form_data.get('data_apresentacao'), '%Y-%m-%d').strftime('%d/%m/%Y')}" if 'incluir_apresentacao' in form_data and form_data.get('data_apresentacao') else ".",
             "{{NUMERO_PARECER}}": form_data.get(f'num_parecer_{sigla}'),
-            "{{DATA_PARECER_EXTENSO}}": data_parecer.strftime('%d de %B de %Y').lower(),
+            "{{DATA_PARECER_EXTENSO}}": f"{data_parecer.day:02d} de {meses_pt[data_parecer.month]} de {data_parecer.year}",
             "{{NOME_DA_COMISSAO}}": comissao['nome'].upper(),
             "{{NOME_RELATOR}}": relator['nome'].upper(),
             "{{CARGO_RELATOR}}": relator['cargo'],
